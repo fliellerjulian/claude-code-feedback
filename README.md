@@ -1,6 +1,9 @@
+
 # Claude Code Diff Feedback
 
 Send inline feedback on git diffs directly to Claude Code from VS Code/Cursor.
+
+![G3RNu2XbEAAUYEH](https://github.com/user-attachments/assets/b59d390c-b81b-4051-8d61-0d82f1ca5dee)
 
 ## Features
 
@@ -18,10 +21,14 @@ Send inline feedback on git diffs directly to Claude Code from VS Code/Cursor.
 
 ## Installation
 
-### From VSIX (Current)
+### From the marketplace
+
+1. just download via this [link](https://marketplace.visualstudio.com/items?itemName=fliellerjulian.claude-code-feedback)
+   
+### From VSIX
 
 1. Download the latest `.vsix` file from releases
-2. Run: `code --install-extension claude-code-feedback-0.0.1.vsix --force`
+2. Run: `code --install-extension claude-code-feedback-0.0.1.vsix`
 3. Reload VS Code/Cursor
 
 ### From Source
@@ -32,7 +39,7 @@ cd claude-code-feedback
 npm install
 npm run compile
 vsce package
-code --install-extension claude-code-feedback-0.0.1.vsix --force
+code --install-extension claude-code-feedback-0.0.1.vsix 
 ```
 
 ## Usage
