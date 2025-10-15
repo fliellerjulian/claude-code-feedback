@@ -1,8 +1,32 @@
 {
     "name": "claude-code-feedback",
     "displayName": "Claude Code Diff Feedback",
-    "description": "Send diff feedback directly to Claude Code",
+    "description": "Send inline feedback on git diffs directly to Claude Code terminal",
     "version": "0.0.1",
+    "publisher": "fliellerjulian",
+    "author": {
+      "name": "Julian Flieller"
+    },
+    "license": "MIT",
+    "repository": {
+      "type": "git",
+      "url": "https://github.com/fliellerjulian/claude-code-feedback"
+    },
+    "bugs": {
+      "url": "https://github.com/fliellerjulian/claude-code-feedback/issues"
+    },
+    "homepage": "https://github.com/fliellerjulian/claude-code-feedback#readme",
+    "keywords": [
+      "claude",
+      "claude-code",
+      "ai",
+      "assistant",
+      "diff",
+      "git",
+      "feedback",
+      "comments",
+      "code-review"
+    ],
     "engines": {
       "vscode": "^1.85.0"
     },

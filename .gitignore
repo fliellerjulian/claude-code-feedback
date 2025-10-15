@@ -1,2 +1,22 @@
+# Dependencies
 node_modules
+
+# Compiled output
 out
+*.vsix
+
+# Development
+.vscode-test
+.vscode/settings.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary files
+*.tmp
+.cache

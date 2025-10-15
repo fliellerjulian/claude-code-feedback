@@ -2,11 +2,9 @@ import * as vscode from "vscode";
 import * as path from "path";
 
 let commentController: vscode.CommentController;
-// Track comment threads by document URI to prevent duplicates
 const documentThreads = new Map<string, vscode.CommentThread[]>();
 
 export function activate(context: vscode.ExtensionContext) {
-  // Create comment controller
   commentController = vscode.comments.createCommentController(
     "claude-code-feedback",
     "Claude Code Feedback"
@@ -14,22 +12,13 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(commentController);
 
-  // Configure comment controller with submit button
   commentController.options = {
     prompt: "Send feedback to Claude Code",
     placeHolder: "Describe what you want Claude to change...",
-    // This command is triggered when the user submits a comment
-    // @ts-ignore - acceptInputCommand might not be in older type definitions
-    acceptInputCommand: {
-      title: "Send",
-      command: "claude-code-feedback.send",
-    },
   };
 
-  // Configure comment controller
   commentController.commentingRangeProvider = {
     provideCommentingRanges: (document: vscode.TextDocument) => {
-      // Allow comments on any line in modified files
       if (isModifiedFile(document)) {
         return [new vscode.Range(0, 0, document.lineCount - 1, 0)];
       }
@@ -37,7 +26,6 @@ export function activate(context: vscode.ExtensionContext) {
     },
   };
 
-  // Register command to send feedback
   const sendCommand = vscode.commands.registerCommand(
     "claude-code-feedback.send",
     async (reply: vscode.CommentReply) => {
@@ -46,7 +34,6 @@ export function activate(context: vscode.ExtensionContext) {
   );
   context.subscriptions.push(sendCommand);
 
-  // Listen for document changes to add comment threads
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor && isModifiedFile(editor.document)) {
@@ -55,7 +42,6 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Listen for text document changes to detect new modifications
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
       const editor = vscode.window.activeTextEditor;
@@ -67,7 +53,6 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // If there's already an active editor with a modified file, process it
   if (
     vscode.window.activeTextEditor &&
     isModifiedFile(vscode.window.activeTextEditor.document)
@@ -77,24 +62,20 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 function isModifiedFile(document: vscode.TextDocument): boolean {
-  // Check if this is a file that has git modifications
-  // VS Code's git extension uses the 'file' scheme for working tree files
   if (document.uri.scheme !== "file") {
     return false;
   }
 
-  // Check if file is in a git repository by checking if git extension is tracking it
   const gitExtension = vscode.extensions.getExtension("vscode.git");
   if (!gitExtension) {
     return false;
   }
 
-  return true; // Allow comments on any file in a git repo
+  return true;
 }
 
 async function addCommentThreadsToChangedLines(document: vscode.TextDocument) {
   try {
-    // Get the git extension
     const gitExtension = vscode.extensions.getExtension("vscode.git");
     if (!gitExtension) {
       return;
@@ -109,7 +90,6 @@ async function addCommentThreadsToChangedLines(document: vscode.TextDocument) {
       return;
     }
 
-    // Find the repository for this document
     const repo = api.repositories.find((r: any) =>
       document.uri.fsPath.startsWith(r.rootUri.fsPath)
     );
@@ -118,31 +98,25 @@ async function addCommentThreadsToChangedLines(document: vscode.TextDocument) {
       return;
     }
 
-    // Get the relative path
     const relativePath = path.relative(
       repo.rootUri.fsPath,
       document.uri.fsPath
     );
 
-    // Get the diff for this file using git diff command
     const diff = await repo.diff(false, relativePath);
 
     if (!diff) {
       return;
     }
 
-    // Parse the diff to find changed line ranges in the current file
     const changedRanges = parseGitDiffForChangedLines(diff);
 
-    // Remove old comment threads for this document
     const documentUri = document.uri.toString();
     const existingThreads = documentThreads.get(documentUri) || [];
     existingThreads.forEach((thread) => thread.dispose());
 
-    // Create new threads for this document
     const newThreads: vscode.CommentThread[] = [];
 
-    // Add a comment thread for each changed section
     changedRanges.forEach((range) => {
       const thread = commentController.createCommentThread(
         document.uri,
@@ -150,14 +124,13 @@ async function addCommentThreadsToChangedLines(document: vscode.TextDocument) {
         []
       );
 
-      thread.canReply = true; // Enable reply functionality
+      thread.canReply = true;
       thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
       thread.comments = [];
 
       newThreads.push(thread);
     });
 
-    // Store the new threads
     documentThreads.set(documentUri, newThreads);
   } catch (error) {
     console.error("Error adding comment threads:", error);
