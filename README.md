@@ -1,6 +1,9 @@
+
 # Claude Code Diff Feedback
 
 Send inline feedback on git diffs directly to Claude Code from VS Code/Cursor.
+
+![G3RNu2XbEAAUYEH](https://github.com/user-attachments/assets/b59d390c-b81b-4051-8d61-0d82f1ca5dee)
 
 ## Features
 
