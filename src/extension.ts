@@ -257,32 +257,18 @@ async function handleSendFeedback(reply: vscode.CommentReply) {
   if (success) {
     vscode.window.showInformationMessage("Sent to Claude Code ✓");
 
-    // Create file reference for display
-    const fileRef = `${diffContext.relativePath}:${diffContext.startLine}${
-      diffContext.endLine !== diffContext.startLine
-        ? `-${diffContext.endLine}`
-        : ""
-    }`;
+    // Dispose the thread to prevent Comments view from opening
+    reply.thread.dispose();
 
-    // Add the comment to the thread with better formatting
-    const commentBody = new vscode.MarkdownString();
-    commentBody.appendMarkdown(`**✓ Sent to Claude Code**\n\n`);
-    commentBody.appendMarkdown(`\`${fileRef}\`\n\n`);
-    commentBody.appendMarkdown(`*${feedback}*`);
-    commentBody.isTrusted = true;
-
-    reply.thread.comments = [
-      ...reply.thread.comments,
-      {
-        body: commentBody,
-        mode: vscode.CommentMode.Preview,
-        author: { name: "You" },
-      } as vscode.Comment,
-    ];
-
-    // Collapse the thread after sending
-    reply.thread.collapsibleState =
-      vscode.CommentThreadCollapsibleState.Collapsed;
+    // Remove from tracking
+    const documentUri = reply.thread.uri.toString();
+    const threads = documentThreads.get(documentUri);
+    if (threads) {
+      const index = threads.indexOf(reply.thread);
+      if (index > -1) {
+        threads.splice(index, 1);
+      }
+    }
   } else {
     vscode.window.showErrorMessage(
       "Could not find active Claude Code terminal"
@@ -493,10 +479,8 @@ async function sendToClaudeCode(message: string): Promise<boolean> {
     return false;
   }
 
-  // Show the terminal
-  claudeTerminal.show(false); // false = don't steal focus
-
-  // Send the message
+  // Send the message without showing/focusing the terminal
+  // This keeps the user in their current context
   claudeTerminal.sendText(message, true); // true = add newline (submit)
 
   return true;
