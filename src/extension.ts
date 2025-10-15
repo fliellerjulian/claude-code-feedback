@@ -92,9 +92,7 @@ function isModifiedFile(document: vscode.TextDocument): boolean {
   return true; // Allow comments on any file in a git repo
 }
 
-async function addCommentThreadsToChangedLines(
-  document: vscode.TextDocument
-) {
+async function addCommentThreadsToChangedLines(document: vscode.TextDocument) {
   try {
     // Get the git extension
     const gitExtension = vscode.extensions.getExtension("vscode.git");
@@ -154,9 +152,6 @@ async function addCommentThreadsToChangedLines(
 
       thread.canReply = true; // Enable reply functionality
       thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
-      thread.label = "Send to Claude Code";
-
-      // Add a custom command button to the thread
       thread.comments = [];
 
       newThreads.push(thread);
@@ -180,26 +175,54 @@ function parseGitDiffForChangedLines(diffText: string): vscode.Range[] {
     if (line.startsWith("@@")) {
       const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
       if (match) {
-        const newStart = parseInt(match[1], 10);
+        const hunkStartLine = parseInt(match[1], 10);
 
-        // Find the end of this hunk
+        // Track added line ranges within this hunk
+        let currentLineNumber = hunkStartLine;
+        let addedRangeStart: number | null = null;
+        let addedRangeEnd: number | null = null;
+
         let j = i + 1;
-        let linesInHunk = 0;
-
         while (j < lines.length && !lines[j].startsWith("@@")) {
           const hunkLine = lines[j];
-          // Count added or unchanged lines (not removed lines which start with -)
-          if (!hunkLine.startsWith("-")) {
-            linesInHunk++;
+
+          if (hunkLine.startsWith("+") && !hunkLine.startsWith("+++")) {
+            // This is an added line
+            if (addedRangeStart === null) {
+              addedRangeStart = currentLineNumber;
+            }
+            addedRangeEnd = currentLineNumber;
+            currentLineNumber++;
+          } else if (hunkLine.startsWith("-")) {
+            // Removed line - close any open range
+            if (addedRangeStart !== null && addedRangeEnd !== null) {
+              ranges.push(
+                new vscode.Range(addedRangeStart - 1, 0, addedRangeEnd - 1, 0)
+              );
+              addedRangeStart = null;
+              addedRangeEnd = null;
+            }
+            // Don't increment line number for removed lines
+          } else {
+            // Context line - close any open range
+            if (addedRangeStart !== null && addedRangeEnd !== null) {
+              ranges.push(
+                new vscode.Range(addedRangeStart - 1, 0, addedRangeEnd - 1, 0)
+              );
+              addedRangeStart = null;
+              addedRangeEnd = null;
+            }
+            currentLineNumber++;
           }
+
           j++;
         }
 
-        if (linesInHunk > 0) {
-          // VS Code uses 0-based line numbers
-          const startLine = newStart - 1;
-          const endLine = startLine + linesInHunk - 1;
-          ranges.push(new vscode.Range(startLine, 0, endLine, 0));
+        // Close any remaining open range at the end of the hunk
+        if (addedRangeStart !== null && addedRangeEnd !== null) {
+          ranges.push(
+            new vscode.Range(addedRangeStart - 1, 0, addedRangeEnd - 1, 0)
+          );
         }
       }
     }
@@ -232,15 +255,26 @@ async function handleSendFeedback(reply: vscode.CommentReply) {
   const success = await sendToClaudeCode(message);
 
   if (success) {
-    vscode.window.showInformationMessage("Feedback sent to Claude Code");
+    vscode.window.showInformationMessage("Sent to Claude Code ✓");
 
-    // Add the comment to the thread
+    // Create file reference for display
+    const fileRef = `${diffContext.relativePath}:${diffContext.startLine}${
+      diffContext.endLine !== diffContext.startLine
+        ? `-${diffContext.endLine}`
+        : ""
+    }`;
+
+    // Add the comment to the thread with better formatting
+    const commentBody = new vscode.MarkdownString();
+    commentBody.appendMarkdown(`**✓ Sent to Claude Code**\n\n`);
+    commentBody.appendMarkdown(`\`${fileRef}\`\n\n`);
+    commentBody.appendMarkdown(`*${feedback}*`);
+    commentBody.isTrusted = true;
+
     reply.thread.comments = [
       ...reply.thread.comments,
       {
-        body: new vscode.MarkdownString(
-          `**Sent to Claude Code:**\n\n${feedback}`
-        ),
+        body: commentBody,
         mode: vscode.CommentMode.Preview,
         author: { name: "You" },
       } as vscode.Comment,
@@ -262,7 +296,7 @@ interface DiffContext {
   startLine: number;
   endLine: number;
   selectedCode: string;
-  diffContent: string;
+  relevantDiffHunk: string;
 }
 
 async function extractDiffContext(
@@ -273,7 +307,7 @@ async function extractDiffContext(
   const filePath = document.uri.fsPath;
 
   // Get git diff for this file
-  let diffContent = "";
+  let fullDiff = "";
   let relativePath = filePath;
 
   try {
@@ -290,12 +324,19 @@ async function extractDiffContext(
 
       if (repo) {
         relativePath = path.relative(repo.rootUri.fsPath, filePath);
-        diffContent = (await repo.diff(false, relativePath)) || "";
+        fullDiff = (await repo.diff(false, relativePath)) || "";
       }
     }
   } catch (error) {
     console.error("Error getting diff context:", error);
   }
+
+  // Extract only the relevant diff hunk for the selected range
+  const relevantDiffHunk = extractRelevantDiffHunk(
+    fullDiff,
+    range.start.line + 1,
+    range.end.line + 1
+  );
 
   return {
     filePath,
@@ -303,22 +344,88 @@ async function extractDiffContext(
     startLine: range.start.line + 1, // Convert to 1-based
     endLine: range.end.line + 1,
     selectedCode,
-    diffContent,
+    relevantDiffHunk,
   };
+}
+
+function extractRelevantDiffHunk(
+  fullDiff: string,
+  startLine: number,
+  endLine: number
+): string {
+  if (!fullDiff) return "";
+
+  const lines = fullDiff.split("\n");
+  let result: string[] = [];
+  let inRelevantHunk = false;
+  let currentNewLineNumber = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Check for hunk header
+    if (line.startsWith("@@")) {
+      const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (match) {
+        currentNewLineNumber = parseInt(match[1], 10);
+
+        // Check if this hunk overlaps with our selected range
+        let hunkEndLine = currentNewLineNumber;
+        for (
+          let j = i + 1;
+          j < lines.length && !lines[j].startsWith("@@");
+          j++
+        ) {
+          if (!lines[j].startsWith("-")) {
+            hunkEndLine++;
+          }
+        }
+
+        // If this hunk overlaps with our range, include it
+        if (
+          (currentNewLineNumber <= endLine && hunkEndLine >= startLine) ||
+          (currentNewLineNumber <= startLine && hunkEndLine >= startLine)
+        ) {
+          inRelevantHunk = true;
+          result.push(line);
+        } else {
+          inRelevantHunk = false;
+        }
+      }
+    } else if (inRelevantHunk) {
+      result.push(line);
+
+      // Update line counter
+      if (!line.startsWith("-")) {
+        currentNewLineNumber++;
+      }
+
+      // Stop if we've passed the end of our range
+      if (currentNewLineNumber > endLine + 5) {
+        // +5 for some context
+        break;
+      }
+    }
+  }
+
+  return result.length > 0 ? result.join("\n") : "";
 }
 
 function formatMessageForClaudeCode(
   context: DiffContext,
   feedback: string
 ): string {
-  let message = `File: ${context.relativePath}\nLines: ${context.startLine}-${context.endLine}\n\n`;
+  // Use proper file path tagging format (file_path:line_number)
+  const fileReference = `${context.relativePath}:${context.startLine}${
+    context.endLine !== context.startLine ? `-${context.endLine}` : ""
+  }`;
 
-  if (context.diffContent) {
-    message += `Git diff:\n\`\`\`diff\n${context.diffContent}\n\`\`\`\n\n`;
+  let message = `@${fileReference}\n\nChange request: ${feedback}`;
+
+  // Add diff context if available
+  if (context.relevantDiffHunk) {
+    message += `\n\n\`\`\`diff\n${context.relevantDiffHunk}\n\`\`\``;
   }
-
-  message += `Selected code:\n\`\`\`\n${context.selectedCode}\n\`\`\`\n\n`;
-  message += `Change request: ${feedback}`;
 
   return message;
 }
