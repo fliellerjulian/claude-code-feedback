@@ -10,65 +10,48 @@ import {
 } from "./diffContextExtractor";
 import { sendToClaudeCode } from "./terminalManager";
 
-let commentController: vscode.CommentController;
+let controller: vscode.CommentController;
 
 export function activate(context: vscode.ExtensionContext) {
-  commentController = vscode.comments.createCommentController(
+  controller = vscode.comments.createCommentController(
     "claude-code-feedback",
     "Claude Code Feedback"
   );
 
-  context.subscriptions.push(commentController);
-
-  commentController.options = {
+  controller.options = {
     prompt: "Send feedback to Claude Code",
     placeHolder: "Describe what you want Claude to change...",
   };
 
-  commentController.commentingRangeProvider = {
-    provideCommentingRanges: (document: vscode.TextDocument) => {
-      if (isModifiedFile(document)) {
-        return [new vscode.Range(0, 0, document.lineCount - 1, 0)];
-      }
-      return null;
+  controller.commentingRangeProvider = {
+    provideCommentingRanges: (document) => {
+      if (!isModifiedFile(document)) return null;
+      return [new vscode.Range(0, 0, document.lineCount - 1, 0)];
     },
   };
 
-  const sendCommand = vscode.commands.registerCommand(
-    "claude-code-feedback.send",
-    async (reply: vscode.CommentReply) => {
-      await handleSendFeedback(reply);
-    }
-  );
-  context.subscriptions.push(sendCommand);
-
   context.subscriptions.push(
+    controller,
+    vscode.commands.registerCommand(
+      "claude-code-feedback.send",
+      handleSendFeedback
+    ),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
-      if (editor && isModifiedFile(editor.document)) {
-        addCommentThreadsToChangedLines(commentController, editor.document);
+      if (editor?.document && isModifiedFile(editor.document)) {
+        addCommentThreadsToChangedLines(controller, editor.document);
       }
-    })
-  );
-
-  context.subscriptions.push(
+    }),
     vscode.workspace.onDidChangeTextDocument((event) => {
       const editor = vscode.window.activeTextEditor;
-      if (editor && editor.document === event.document) {
-        if (isModifiedFile(event.document)) {
-          addCommentThreadsToChangedLines(commentController, event.document);
-        }
+      if (editor?.document === event.document && isModifiedFile(event.document)) {
+        addCommentThreadsToChangedLines(controller, event.document);
       }
     })
   );
 
-  if (
-    vscode.window.activeTextEditor &&
-    isModifiedFile(vscode.window.activeTextEditor.document)
-  ) {
-    addCommentThreadsToChangedLines(
-      commentController,
-      vscode.window.activeTextEditor.document
-    );
+  const editor = vscode.window.activeTextEditor;
+  if (editor?.document && isModifiedFile(editor.document)) {
+    addCommentThreadsToChangedLines(controller, editor.document);
   }
 }
 
@@ -85,23 +68,18 @@ async function handleSendFeedback(reply: vscode.CommentReply) {
   }
 
   const document = await vscode.workspace.openTextDocument(reply.thread.uri);
-  const diffContext = await extractDiffContext(document, reply.thread.range);
-  const message = formatMessageForClaudeCode(diffContext, feedback);
-  const success = await sendToClaudeCode(message);
+  const context = await extractDiffContext(document, reply.thread.range);
+  const message = formatMessageForClaudeCode(context, feedback);
 
-  if (success) {
+  if (await sendToClaudeCode(message)) {
     vscode.window.showInformationMessage("Sent to Claude Code ✓");
     reply.thread.dispose();
     removeCommentThread(reply.thread);
   } else {
-    vscode.window.showErrorMessage(
-      "Could not find active Claude Code terminal"
-    );
+    vscode.window.showErrorMessage("Could not find Claude Code terminal");
   }
 }
 
 export function deactivate() {
-  if (commentController) {
-    commentController.dispose();
-  }
+  controller?.dispose();
 }

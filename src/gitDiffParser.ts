@@ -1,9 +1,5 @@
 import * as vscode from "vscode";
 
-/**
- * Parses git diff output to find line ranges that were added.
- * Only returns ranges for added lines (lines starting with +), not context lines.
- */
 export function parseGitDiffForChangedLines(diffText: string): vscode.Range[] {
   const ranges: vscode.Range[] = [];
   const lines = diffText.split("\n");
@@ -13,49 +9,40 @@ export function parseGitDiffForChangedLines(diffText: string): vscode.Range[] {
 
     if (line.startsWith("@@")) {
       const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
-      if (match) {
-        const hunkStartLine = parseInt(match[1], 10);
-        let currentLineNumber = hunkStartLine;
-        let addedRangeStart: number | null = null;
-        let addedRangeEnd: number | null = null;
+      if (!match) continue;
 
-        let j = i + 1;
-        while (j < lines.length && !lines[j].startsWith("@@")) {
-          const hunkLine = lines[j];
+      const hunkStartLine = parseInt(match[1], 10);
+      let currentLine = hunkStartLine;
+      let rangeStart: number | null = null;
+      let rangeEnd: number | null = null;
 
-          if (hunkLine.startsWith("+") && !hunkLine.startsWith("+++")) {
-            if (addedRangeStart === null) {
-              addedRangeStart = currentLineNumber;
-            }
-            addedRangeEnd = currentLineNumber;
-            currentLineNumber++;
-          } else if (hunkLine.startsWith("-")) {
-            if (addedRangeStart !== null && addedRangeEnd !== null) {
-              ranges.push(
-                new vscode.Range(addedRangeStart - 1, 0, addedRangeEnd - 1, 0)
-              );
-              addedRangeStart = null;
-              addedRangeEnd = null;
-            }
-          } else {
-            if (addedRangeStart !== null && addedRangeEnd !== null) {
-              ranges.push(
-                new vscode.Range(addedRangeStart - 1, 0, addedRangeEnd - 1, 0)
-              );
-              addedRangeStart = null;
-              addedRangeEnd = null;
-            }
-            currentLineNumber++;
+      let j = i + 1;
+      while (j < lines.length && !lines[j].startsWith("@@")) {
+        const hunkLine = lines[j];
+
+        if (hunkLine.startsWith("+") && !hunkLine.startsWith("+++")) {
+          if (rangeStart === null) rangeStart = currentLine;
+          rangeEnd = currentLine;
+          currentLine++;
+        } else if (hunkLine.startsWith("-")) {
+          if (rangeStart !== null && rangeEnd !== null) {
+            ranges.push(new vscode.Range(rangeStart - 1, 0, rangeEnd - 1, 0));
+            rangeStart = null;
+            rangeEnd = null;
           }
-
-          j++;
+        } else {
+          if (rangeStart !== null && rangeEnd !== null) {
+            ranges.push(new vscode.Range(rangeStart - 1, 0, rangeEnd - 1, 0));
+            rangeStart = null;
+            rangeEnd = null;
+          }
+          currentLine++;
         }
+        j++;
+      }
 
-        if (addedRangeStart !== null && addedRangeEnd !== null) {
-          ranges.push(
-            new vscode.Range(addedRangeStart - 1, 0, addedRangeEnd - 1, 0)
-          );
-        }
+      if (rangeStart !== null && rangeEnd !== null) {
+        ranges.push(new vscode.Range(rangeStart - 1, 0, rangeEnd - 1, 0));
       }
     }
   }
@@ -63,9 +50,6 @@ export function parseGitDiffForChangedLines(diffText: string): vscode.Range[] {
   return ranges;
 }
 
-/**
- * Extracts only the relevant diff hunk that overlaps with the specified line range.
- */
 export function extractRelevantDiffHunk(
   fullDiff: string,
   startLine: number,
@@ -74,51 +58,39 @@ export function extractRelevantDiffHunk(
   if (!fullDiff) return "";
 
   const lines = fullDiff.split("\n");
-  let result: string[] = [];
+  const result: string[] = [];
   let inRelevantHunk = false;
-  let currentNewLineNumber = 0;
+  let currentLine = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
     if (line.startsWith("@@")) {
       const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      if (match) {
-        currentNewLineNumber = parseInt(match[1], 10);
+      if (!match) continue;
 
-        let hunkEndLine = currentNewLineNumber;
-        for (
-          let j = i + 1;
-          j < lines.length && !lines[j].startsWith("@@");
-          j++
-        ) {
-          if (!lines[j].startsWith("-")) {
-            hunkEndLine++;
-          }
-        }
+      currentLine = parseInt(match[1], 10);
 
-        if (
-          (currentNewLineNumber <= endLine && hunkEndLine >= startLine) ||
-          (currentNewLineNumber <= startLine && hunkEndLine >= startLine)
-        ) {
-          inRelevantHunk = true;
-          result.push(line);
-        } else {
-          inRelevantHunk = false;
-        }
+      let hunkEnd = currentLine;
+      for (let j = i + 1; j < lines.length && !lines[j].startsWith("@@"); j++) {
+        if (!lines[j].startsWith("-")) hunkEnd++;
+      }
+
+      if (
+        (currentLine <= endLine && hunkEnd >= startLine) ||
+        (currentLine <= startLine && hunkEnd >= startLine)
+      ) {
+        inRelevantHunk = true;
+        result.push(line);
+      } else {
+        inRelevantHunk = false;
       }
     } else if (inRelevantHunk) {
       result.push(line);
-
-      if (!line.startsWith("-")) {
-        currentNewLineNumber++;
-      }
-
-      if (currentNewLineNumber > endLine + 5) {
-        break;
-      }
+      if (!line.startsWith("-")) currentLine++;
+      if (currentLine > endLine + 5) break;
     }
   }
 
-  return result.length > 0 ? result.join("\n") : "";
+  return result.join("\n");
 }

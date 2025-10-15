@@ -3,17 +3,12 @@ import * as path from "path";
 import { DiffContext } from "./types";
 import { extractRelevantDiffHunk } from "./gitDiffParser";
 
-/**
- * Extracts diff context for a given document and range.
- * This includes the file path, line numbers, selected code, and relevant diff hunk.
- */
 export async function extractDiffContext(
   document: vscode.TextDocument,
   range: vscode.Range
 ): Promise<DiffContext> {
   const selectedCode = document.getText(range);
   const filePath = document.uri.fsPath;
-
   let fullDiff = "";
   let relativePath = filePath;
 
@@ -54,19 +49,15 @@ export async function extractDiffContext(
   };
 }
 
-/**
- * Formats the diff context and feedback into a message optimized for Claude Code.
- * Uses @file:line syntax for proper file navigation.
- */
 export function formatMessageForClaudeCode(
   context: DiffContext,
   feedback: string
 ): string {
-  const fileReference = `${context.relativePath}:${context.startLine}${
+  const fileRef = `${context.relativePath}:${context.startLine}${
     context.endLine !== context.startLine ? `-${context.endLine}` : ""
   }`;
 
-  let message = `@${fileReference}\n\nChange request: ${feedback}`;
+  let message = `@${fileRef}\n\nChange request: ${feedback}`;
 
   if (context.relevantDiffHunk) {
     message += `\n\n\`\`\`diff\n${context.relevantDiffHunk}\n\`\`\``;
