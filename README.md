@@ -23,7 +23,7 @@ Send inline feedback on git diffs directly to Claude Code from VS Code/Cursor.
 
 ### From the marketplace
 
-1. just download via this link: https://marketplace.visualstudio.com/items?itemName=fliellerjulian.claude-code-feedback
+1. just download via this [link](https://marketplace.visualstudio.com/items?itemName=fliellerjulian.claude-code-feedback)
    
 ### From VSIX
 
