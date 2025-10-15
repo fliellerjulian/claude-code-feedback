@@ -1,0 +1,3 @@
+npx tsc
+vsce package
+code --install-extension claude-code-feedback-0.0.1.vsix --force

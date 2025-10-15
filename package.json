@@ -8,6 +8,7 @@
     },
     "categories": ["Other"],
     "activationEvents": ["onStartupFinished"],
+    "extensionDependencies": ["vscode.git"],
     "main": "./out/extension.js",
     "contributes": {
       "commands": [
@@ -16,6 +17,11 @@
           "title": "Send Feedback to Claude Code"
         }
       ]
+    },
+    "scripts": {
+      "compile": "tsc -p ./",
+      "watch": "tsc -watch -p ./",
+      "package": "vsce package"
     },
     "devDependencies": {
       "@types/vscode": "^1.85.0",

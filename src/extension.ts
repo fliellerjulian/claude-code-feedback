@@ -15,8 +15,8 @@ export function activate(context: vscode.ExtensionContext) {
   // Configure comment controller
   commentController.commentingRangeProvider = {
     provideCommentingRanges: (document: vscode.TextDocument) => {
-      // Allow comments on any line in git diff views
-      if (isGitDiff(document)) {
+      // Allow comments on any line in modified files
+      if (isModifiedFile(document)) {
         return [new vscode.Range(0, 0, document.lineCount - 1, 0)];
       }
       return null;
@@ -29,178 +29,264 @@ export function activate(context: vscode.ExtensionContext) {
     placeHolder: "Describe what you want Claude to change...",
   };
 
+  // Register command to send feedback
+  const sendCommand = vscode.commands.registerCommand(
+    "claude-code-feedback.send",
+    async (reply: vscode.CommentReply) => {
+      await handleSendFeedback(reply);
+    }
+  );
+  context.subscriptions.push(sendCommand);
+
   // Listen for document changes to add comment threads
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
-      if (editor && isGitDiff(editor.document)) {
+      if (editor && isModifiedFile(editor.document)) {
         addCommentThreadsToChangedLines(editor.document);
       }
     })
   );
 
-  // If there's already an active editor with a diff, process it
+  // Listen for text document changes to detect new modifications
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && editor.document === event.document) {
+        if (isModifiedFile(event.document)) {
+          addCommentThreadsToChangedLines(event.document);
+        }
+      }
+    })
+  );
+
+  // If there's already an active editor with a modified file, process it
   if (
     vscode.window.activeTextEditor &&
-    isGitDiff(vscode.window.activeTextEditor.document)
+    isModifiedFile(vscode.window.activeTextEditor.document)
   ) {
     addCommentThreadsToChangedLines(vscode.window.activeTextEditor.document);
   }
 }
 
-function isGitDiff(document: vscode.TextDocument): boolean {
-  // Check if this is a git diff view
-  return (
-    document.uri.scheme === "git" ||
-    (document.uri.scheme === "file" &&
-      document.getText().includes("diff --git"))
-  );
+function isModifiedFile(document: vscode.TextDocument): boolean {
+  // Check if this is a file that has git modifications
+  // VS Code's git extension uses the 'file' scheme for working tree files
+  if (document.uri.scheme !== "file") {
+    return false;
+  }
+
+  // Check if file is in a git repository by checking if git extension is tracking it
+  const gitExtension = vscode.extensions.getExtension("vscode.git");
+  if (!gitExtension) {
+    return false;
+  }
+
+  return true; // Allow comments on any file in a git repo
 }
 
-function addCommentThreadsToChangedLines(document: vscode.TextDocument) {
-  const text = document.getText();
-  const lines = text.split("\n");
+async function addCommentThreadsToChangedLines(
+  document: vscode.TextDocument
+) {
+  try {
+    // Get the git extension
+    const gitExtension = vscode.extensions.getExtension("vscode.git");
+    if (!gitExtension) {
+      return;
+    }
 
-  // Parse diff to find changed line ranges
-  const changedRanges = parseDiffRanges(lines);
+    const git = gitExtension.isActive
+      ? gitExtension.exports
+      : await gitExtension.activate();
+    const api = git.getAPI(1);
 
-  // Add a comment thread for each changed section
-  changedRanges.forEach((range) => {
-    const thread = commentController.createCommentThread(
-      document.uri,
-      range,
-      []
+    if (api.repositories.length === 0) {
+      return;
+    }
+
+    // Find the repository for this document
+    const repo = api.repositories.find((r: any) =>
+      document.uri.fsPath.startsWith(r.rootUri.fsPath)
     );
 
-    thread.canReply = true;
-    thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
-    thread.label = "Send to Claude Code";
+    if (!repo) {
+      return;
+    }
 
-    // Handle when user adds a comment
-    thread.comments = [
-      {
-        body: new vscode.MarkdownString("💬 Add feedback for this change"),
-        mode: vscode.CommentMode.Preview,
-        author: { name: "Claude Code" },
-      } as vscode.Comment,
-    ];
-  });
+    // Get the relative path
+    const relativePath = path.relative(
+      repo.rootUri.fsPath,
+      document.uri.fsPath
+    );
+
+    // Get the diff for this file using git diff command
+    const diff = await repo.diff(false, relativePath);
+
+    if (!diff) {
+      return;
+    }
+
+    // Parse the diff to find changed line ranges in the current file
+    const changedRanges = parseGitDiffForChangedLines(diff);
+
+    // Remove old comment threads for this document
+    // (Note: We'd need to track threads, but for simplicity, VS Code handles this)
+
+    // Add a comment thread for each changed section
+    changedRanges.forEach((range) => {
+      const thread = commentController.createCommentThread(
+        document.uri,
+        range,
+        []
+      );
+
+      thread.canReply = true;
+      thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
+      thread.label = "Send to Claude Code";
+    });
+  } catch (error) {
+    console.error("Error adding comment threads:", error);
+  }
 }
 
-function parseDiffRanges(lines: string[]): vscode.Range[] {
+function parseGitDiffForChangedLines(diffText: string): vscode.Range[] {
   const ranges: vscode.Range[] = [];
-  let currentStart = -1;
-  let inDiffHunk = false;
+  const lines = diffText.split("\n");
+
+  let currentLineNum = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Start of a diff hunk
+    // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
     if (line.startsWith("@@")) {
-      inDiffHunk = true;
-      currentStart = i;
-    }
-    // End of current hunk (next hunk or end of changes)
-    else if (
-      inDiffHunk &&
-      (line.startsWith("@@") ||
-        line.startsWith("diff --git") ||
-        i === lines.length - 1)
-    ) {
-      if (currentStart !== -1) {
-        ranges.push(new vscode.Range(currentStart, 0, i - 1, 0));
-      }
-      currentStart = line.startsWith("@@") ? i : -1;
-      inDiffHunk = line.startsWith("@@");
-    }
-  }
+      const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+      if (match) {
+        const newStart = parseInt(match[1], 10);
+        const newCount = match[2] ? parseInt(match[2], 10) : 1;
 
-  // Handle last hunk
-  if (currentStart !== -1) {
-    ranges.push(new vscode.Range(currentStart, 0, lines.length - 1, 0));
+        // Find the end of this hunk
+        let hunkEndLine = newStart;
+        let j = i + 1;
+        let linesInHunk = 0;
+
+        while (j < lines.length && !lines[j].startsWith("@@")) {
+          const hunkLine = lines[j];
+          // Count added or unchanged lines (not removed lines which start with -)
+          if (!hunkLine.startsWith("-")) {
+            linesInHunk++;
+          }
+          j++;
+        }
+
+        if (linesInHunk > 0) {
+          // VS Code uses 0-based line numbers
+          const startLine = newStart - 1;
+          const endLine = startLine + linesInHunk - 1;
+          ranges.push(new vscode.Range(startLine, 0, endLine, 0));
+        }
+      }
+    }
   }
 
   return ranges;
 }
 
-// Register command to send feedback
-vscode.commands.registerCommand(
-  "claude-code-feedback.send",
-  async (reply: vscode.CommentReply) => {
-    const feedback = reply.text.trim();
-    if (!feedback) {
-      vscode.window.showWarningMessage("Please enter feedback before sending");
-      return;
-    }
-
-    // Check if thread has a range
-    if (!reply.thread.range) {
-      vscode.window.showErrorMessage("Could not determine comment location");
-      return;
-    }
-
-    // Extract the diff context
-    const document = await vscode.workspace.openTextDocument(reply.thread.uri);
-    const diffContext = extractDiffContext(document, reply.thread.range);
-
-    // Format message for Claude Code
-    const message = formatMessageForClaudeCode(diffContext, feedback);
-
-    // Send to Claude Code terminal
-    const success = await sendToClaudeCode(message);
-
-    if (success) {
-      vscode.window.showInformationMessage("✓ Feedback sent to Claude Code");
-
-      // Add the comment to the thread
-      reply.thread.comments = [
-        ...reply.thread.comments,
-        {
-          body: new vscode.MarkdownString(
-            `**Sent to Claude Code:**\n\n${feedback}`
-          ),
-          mode: vscode.CommentMode.Preview,
-          author: { name: "You" },
-        } as vscode.Comment,
-      ];
-    } else {
-      vscode.window.showErrorMessage(
-        "Could not find active Claude Code terminal"
-      );
-    }
+async function handleSendFeedback(reply: vscode.CommentReply) {
+  const feedback = reply.text.trim();
+  if (!feedback) {
+    vscode.window.showWarningMessage("Please enter feedback before sending");
+    return;
   }
-);
+
+  // Check if thread has a range
+  if (!reply.thread.range) {
+    vscode.window.showErrorMessage("Could not determine comment location");
+    return;
+  }
+
+  // Extract the diff context
+  const document = await vscode.workspace.openTextDocument(reply.thread.uri);
+  const diffContext = await extractDiffContext(document, reply.thread.range);
+
+  // Format message for Claude Code
+  const message = formatMessageForClaudeCode(diffContext, feedback);
+
+  // Send to Claude Code terminal
+  const success = await sendToClaudeCode(message);
+
+  if (success) {
+    vscode.window.showInformationMessage("Feedback sent to Claude Code");
+
+    // Add the comment to the thread
+    reply.thread.comments = [
+      ...reply.thread.comments,
+      {
+        body: new vscode.MarkdownString(
+          `**Sent to Claude Code:**\n\n${feedback}`
+        ),
+        mode: vscode.CommentMode.Preview,
+        author: { name: "You" },
+      } as vscode.Comment,
+    ];
+
+    // Collapse the thread after sending
+    reply.thread.collapsibleState =
+      vscode.CommentThreadCollapsibleState.Collapsed;
+  } else {
+    vscode.window.showErrorMessage(
+      "Could not find active Claude Code terminal"
+    );
+  }
+}
 
 interface DiffContext {
   filePath: string;
+  relativePath: string;
   startLine: number;
   endLine: number;
+  selectedCode: string;
   diffContent: string;
 }
 
-function extractDiffContext(
+async function extractDiffContext(
   document: vscode.TextDocument,
   range: vscode.Range
-): DiffContext {
-  const text = document.getText(range);
-  const lines = document.getText().split("\n");
+): Promise<DiffContext> {
+  const selectedCode = document.getText(range);
+  const filePath = document.uri.fsPath;
 
-  // Try to find the file path from the diff header
-  let filePath = "unknown";
-  for (let i = range.start.line; i >= 0; i--) {
-    if (lines[i].startsWith("diff --git")) {
-      const match = lines[i].match(/b\/(.+)$/);
-      if (match) {
-        filePath = match[1];
-        break;
+  // Get git diff for this file
+  let diffContent = "";
+  let relativePath = filePath;
+
+  try {
+    const gitExtension = vscode.extensions.getExtension("vscode.git");
+    if (gitExtension) {
+      const git = gitExtension.isActive
+        ? gitExtension.exports
+        : await gitExtension.activate();
+      const api = git.getAPI(1);
+
+      const repo = api.repositories.find((r: any) =>
+        filePath.startsWith(r.rootUri.fsPath)
+      );
+
+      if (repo) {
+        relativePath = path.relative(repo.rootUri.fsPath, filePath);
+        diffContent = (await repo.diff(false, relativePath)) || "";
       }
     }
+  } catch (error) {
+    console.error("Error getting diff context:", error);
   }
 
   return {
     filePath,
-    startLine: range.start.line,
-    endLine: range.end.line,
-    diffContent: text,
+    relativePath,
+    startLine: range.start.line + 1, // Convert to 1-based
+    endLine: range.end.line + 1,
+    selectedCode,
+    diffContent,
   };
 }
 
@@ -208,15 +294,16 @@ function formatMessageForClaudeCode(
   context: DiffContext,
   feedback: string
 ): string {
-  return `Please modify only this section:
+  let message = `File: ${context.relativePath}\nLines: ${context.startLine}-${context.endLine}\n\n`;
 
-File: ${context.filePath}
-Lines: ${context.startLine}-${context.endLine}
+  if (context.diffContent) {
+    message += `Git diff:\n\`\`\`diff\n${context.diffContent}\n\`\`\`\n\n`;
+  }
 
-Current diff:
-${context.diffContent}
+  message += `Selected code:\n\`\`\`\n${context.selectedCode}\n\`\`\`\n\n`;
+  message += `Change request: ${feedback}`;
 
-Requested change: ${feedback}`;
+  return message;
 }
 
 async function sendToClaudeCode(message: string): Promise<boolean> {
