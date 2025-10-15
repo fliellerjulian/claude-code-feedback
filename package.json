@@ -16,7 +16,27 @@
           "command": "claude-code-feedback.send",
           "title": "Send Feedback to Claude Code"
         }
-      ]
+      ],
+      "menus": {
+        "comments/comment/title": [],
+        "comments/commentThread/context": [
+          {
+            "command": "claude-code-feedback.send",
+            "group": "inline",
+            "when": "commentController == claude-code-feedback"
+          }
+        ]
+      },
+      "configuration": {
+        "title": "Claude Code Feedback",
+        "properties": {
+          "claude-code-feedback.terminalNamePattern": {
+            "type": "string",
+            "default": "",
+            "description": "Pattern to match the terminal name where Claude Code is running (e.g., 'node', 'claude'). Leave empty to be prompted each time."
+          }
+        }
+      }
     },
     "scripts": {
       "compile": "tsc -p ./",

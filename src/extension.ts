@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import * as path from "path";
 
 let commentController: vscode.CommentController;
+// Track comment threads by document URI to prevent duplicates
+const documentThreads = new Map<string, vscode.CommentThread[]>();
 
 export function activate(context: vscode.ExtensionContext) {
   // Create comment controller
@@ -12,6 +14,18 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(commentController);
 
+  // Configure comment controller with submit button
+  commentController.options = {
+    prompt: "Send feedback to Claude Code",
+    placeHolder: "Describe what you want Claude to change...",
+    // This command is triggered when the user submits a comment
+    // @ts-ignore - acceptInputCommand might not be in older type definitions
+    acceptInputCommand: {
+      title: "Send",
+      command: "claude-code-feedback.send",
+    },
+  };
+
   // Configure comment controller
   commentController.commentingRangeProvider = {
     provideCommentingRanges: (document: vscode.TextDocument) => {
@@ -21,12 +35,6 @@ export function activate(context: vscode.ExtensionContext) {
       }
       return null;
     },
-  };
-
-  // Handle comment creation
-  commentController.options = {
-    prompt: "Send feedback to Claude Code",
-    placeHolder: "Describe what you want Claude to change...",
   };
 
   // Register command to send feedback
@@ -129,7 +137,12 @@ async function addCommentThreadsToChangedLines(
     const changedRanges = parseGitDiffForChangedLines(diff);
 
     // Remove old comment threads for this document
-    // (Note: We'd need to track threads, but for simplicity, VS Code handles this)
+    const documentUri = document.uri.toString();
+    const existingThreads = documentThreads.get(documentUri) || [];
+    existingThreads.forEach((thread) => thread.dispose());
+
+    // Create new threads for this document
+    const newThreads: vscode.CommentThread[] = [];
 
     // Add a comment thread for each changed section
     changedRanges.forEach((range) => {
@@ -139,10 +152,18 @@ async function addCommentThreadsToChangedLines(
         []
       );
 
-      thread.canReply = true;
+      thread.canReply = true; // Enable reply functionality
       thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
       thread.label = "Send to Claude Code";
+
+      // Add a custom command button to the thread
+      thread.comments = [];
+
+      newThreads.push(thread);
     });
+
+    // Store the new threads
+    documentThreads.set(documentUri, newThreads);
   } catch (error) {
     console.error("Error adding comment threads:", error);
   }
@@ -152,8 +173,6 @@ function parseGitDiffForChangedLines(diffText: string): vscode.Range[] {
   const ranges: vscode.Range[] = [];
   const lines = diffText.split("\n");
 
-  let currentLineNum = 0;
-
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
@@ -162,10 +181,8 @@ function parseGitDiffForChangedLines(diffText: string): vscode.Range[] {
       const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
       if (match) {
         const newStart = parseInt(match[1], 10);
-        const newCount = match[2] ? parseInt(match[2], 10) : 1;
 
         // Find the end of this hunk
-        let hunkEndLine = newStart;
         let j = i + 1;
         let linesInHunk = 0;
 
@@ -307,17 +324,62 @@ function formatMessageForClaudeCode(
 }
 
 async function sendToClaudeCode(message: string): Promise<boolean> {
-  // Find the Claude Code terminal
   const terminals = vscode.window.terminals;
-  let claudeTerminal = terminals.find(
-    (t) =>
-      t.name.toLowerCase().includes("claude") ||
-      t.name.toLowerCase().includes("claude-code")
-  );
 
-  // If not found, try to find by checking the most recent terminal
-  if (!claudeTerminal && terminals.length > 0) {
-    claudeTerminal = terminals[terminals.length - 1];
+  if (terminals.length === 0) {
+    vscode.window.showErrorMessage("No terminals found");
+    return false;
+  }
+
+  let claudeTerminal: vscode.Terminal | undefined;
+
+  // Strategy 1: Check for user-configured terminal name pattern
+  const config = vscode.workspace.getConfiguration("claude-code-feedback");
+  const terminalPattern = config.get<string>("terminalNamePattern");
+
+  if (terminalPattern) {
+    claudeTerminal = terminals.find((t) =>
+      t.name.toLowerCase().includes(terminalPattern.toLowerCase())
+    );
+  }
+
+  // Strategy 2: Look for common Claude Code terminal names
+  if (!claudeTerminal) {
+    const matchingTerminals = terminals.filter(
+      (t) =>
+        t.name.toLowerCase().includes("claude") ||
+        t.name.toLowerCase().includes("node")
+    );
+
+    // If exactly one match, use it
+    if (matchingTerminals.length === 1) {
+      claudeTerminal = matchingTerminals[0];
+    }
+  }
+
+  // Strategy 3: If only one terminal exists, use it
+  if (!claudeTerminal && terminals.length === 1) {
+    claudeTerminal = terminals[0];
+  }
+
+  // Strategy 4: Ask the user to select a terminal if we couldn't determine automatically
+  if (!claudeTerminal) {
+    const terminalOptions = terminals.map((t, i) => ({
+      label: t.name,
+      description: `Terminal ${i + 1}`,
+      terminal: t,
+    }));
+
+    const selected = await vscode.window.showQuickPick(terminalOptions, {
+      placeHolder: "Select which terminal is running Claude Code",
+      title: "Send to Claude Code Terminal",
+    });
+
+    if (!selected) {
+      return false; // User cancelled
+    }
+
+    claudeTerminal = selected.terminal;
   }
 
   if (!claudeTerminal) {
